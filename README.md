@@ -1,4 +1,4 @@
-📘 FastAPI + Azure Entra ID (Single-Tenant) Authentication
+#📘 FastAPI + Azure Entra ID (Single-Tenant) Authentication
 
 Complete Guide with Code Structure & Azure Setup
 
@@ -14,7 +14,7 @@ It includes:
 ✔️ Azure App Registrations (API + Swagger App)
 ✔️ CORS + configuration management with .env
 
-📁 Project Structure
+#📁 Project Structure
 /app
  ├── main.py
  ├── config.py
@@ -25,7 +25,7 @@ It includes:
        ├── public.py
        └── protected.py
 
-🧩 1. Code Overview
+##🧩 1. Code Overview
 🔹 config.py — Application Settings
 
 Uses pydantic-settings to load environment variables from .env.
@@ -103,11 +103,11 @@ swagger_ui_init_oauth={
 
 This enables “Authorize” button login using Azure.
 
-🔐 2. Azure Setup (Critical Section)
+##🔐 2. Azure Setup (Critical Section)
 
 You must create two Azure App Registrations.
 
-🅐 App Registration 1 – Backend API App
+#🅐 App Registration 1 – Backend API App
 
 This is your FastAPI backend.
 
@@ -158,7 +158,7 @@ Open Manifest → Set:
 
 This ensures v2.0 tokens are issued.
 
-🅑 App Registration 2 – Swagger / OpenAPI Client
+#🅑 App Registration 2 – Swagger / OpenAPI Client
 
 Swagger UI needs its own app registration, because users login through Swagger.
 
