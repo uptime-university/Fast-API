@@ -1,20 +1,17 @@
-#📘 FastAPI + Azure Entra ID (Single-Tenant) Authentication
+# FastAPI + Azure Entra ID (Single-Tenant) Authentication
 
-Complete Guide with Code Structure & Azure Setup
+A concise, corrected, and more-consistent guide for securing a FastAPI application using Azure Entra ID (formerly Azure AD) with the fastapi-azure-auth library. This README tidies up variable names, adds clear code examples, and fixes formatting and small inaccuracies.
 
-This project demonstrates secure authentication for a FastAPI application using Azure Entra ID (formerly Azure AD) with the fastapi-azure-auth library.
+What this project demonstrates
+- Secure protected routes (scope-based)
+- Public routes
+- OAuth2 Authorization Code Flow (PKCE) in Swagger UI
+- Clear project structure
+- Azure App Registrations (API + Swagger/OpenAPI client)
+- CORS and configuration via .env
 
-It includes:
-
-✔️ Secure protected routes
-✔️ Public routes
-✔️ OAuth2 Authorization Code Flow (PKCE)
-✔️ Swagger UI login using Azure
-✔️ Proper project structure
-✔️ Azure App Registrations (API + Swagger App)
-✔️ CORS + configuration management with .env
-
-#📁 Project Structure
+Project layout
+```
 /app
  ├── main.py
  ├── config.py
@@ -24,222 +21,172 @@ It includes:
  ├── routers/
        ├── public.py
        └── protected.py
+```
 
-##🧩 1. Code Overview
-🔹 config.py — Application Settings
-
-Uses pydantic-settings to load environment variables from .env.
-
-Azure Client IDs
-
-Tenant ID
-
-CORS configuration
-
-Scope configuration (auto-generated)
+1. Code overview (key snippets)
+- config.py — Application settings (pydantic)
+```python
+from pydantic import BaseSettings, AnyUrl
+from typing import List
 
 class Settings(BaseSettings):
-    OPENAPI_CLIENT_ID: str = ""
-    APP_CLIENT_ID: str = ""
-    TENANT_ID: str = ""
-    SCOPE_DESCRIPTION: str = "user_impersonation"
+    TENANT_ID: str
+    APP_CLIENT_ID: str      # Backend (API) app registration client id
+    OPENAPI_CLIENT_ID: str  # Swagger/OAuth client id
+    SCOPE_NAME: str = "user_impersonation"
+    BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:8000"]
 
+    @property
+    def SCOPE_FULL_NAME(self) -> str:
+        # api://<APP_CLIENT_ID>/user_impersonation
+        return f"api://{self.APP_CLIENT_ID}/{self.SCOPE_NAME}"
 
-The scope name is calculated as:
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+```
 
-api://<APP_CLIENT_ID>/user_impersonation
+- auth/azure_auth.py — Azure authentication setup
+```python
+from fastapi import Security
+from fastapi_azure_auth import SingleTenantAzureAuthorizationCodeBearer
+from .config import Settings
 
-🔹 auth/azure_auth.py — Azure Authentication Setup
-
-Creates the SingleTenantAzureAuthorizationCodeBearer object.
-This validates access tokens and loads OpenID metadata.
+settings = Settings()
 
 azure_scheme = SingleTenantAzureAuthorizationCodeBearer(
     app_client_id=settings.APP_CLIENT_ID,
     tenant_id=settings.TENANT_ID,
-    scopes=settings.SCOPES,
+    scopes=[settings.SCOPE_FULL_NAME],  # list of allowed scopes
 )
+```
+Note: A startup lifecycle step is useful to ensure OpenID metadata is fetched on app start. The fastapi-azure-auth docs show how to call the metadata loader at startup.
 
+- routers/public.py
+```python
+from fastapi import APIRouter
 
-Includes a lifespan function so metadata loads at startup.
-
-🔹 routers/public.py
-
-A simple public route:
+router = APIRouter()
 
 @router.get("/")
 async def public_route():
     return {"message": "Hello, this is a public endpoint."}
+```
 
+- routers/protected.py
+```python
+from fastapi import APIRouter, Security
+from auth.azure_auth import azure_scheme
+from config import Settings
 
-No authentication required.
-
-🔹 routers/protected.py
-
-A route that requires Azure login + scopes:
+settings = Settings()
+router = APIRouter()
 
 @router.get("/protected")
-async def protected_route(user = Security(azure_scheme, scopes=[settings.SCOPE_NAME])):
+async def protected_route(user = Security(azure_scheme, scopes=[settings.SCOPE_FULL_NAME])):
+    # user is a pydantic model provided by fastapi-azure-auth
     return {"message": "You are authenticated!", "user": user.dict()}
+```
 
-🔹 main.py — Application Initialization
+- main.py (initialization, lifespan, CORS, Swagger OAuth)
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from config import Settings
+from routers import public, protected
 
-Loads lifespan
+settings = Settings()
+app = FastAPI()
 
-Enables CORS
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-Configures Swagger UI OAuth2
+# register routers
+app.include_router(public.router)
+app.include_router(protected.router, prefix="/api")
 
-Registers routers
-
-Swagger OAuth setup:
-
-swagger_ui_init_oauth={
+# configure Swagger UI OAuth2 (so the Authorize button works)
+app.swagger_ui_init_oauth = {
     "usePkceWithAuthorizationCodeGrant": True,
     "clientId": settings.OPENAPI_CLIENT_ID,
-    "scopes": [settings.SCOPE_NAME],
+    "scopes": [settings.SCOPE_FULL_NAME],
 }
+```
 
+2. Azure setup (single-tenant)
+You must create two App Registrations in the tenant.
 
-This enables “Authorize” button login using Azure.
+A. Backend API app (fastapi-backend)
+- Register a new app — name: fastapi-backend
+- Supported account types: Single tenant
+- Copy:
+  - Application (client) ID → APP_CLIENT_ID
+  - Directory (tenant) ID → TENANT_ID
+- Expose an API
+  - Application ID URI: api://<APP_CLIENT_ID>
+  - Add a scope:
+    - Scope name: user_impersonation
+    - Admin consent display name: Access API
+    - Admin consent description: Allows user to call the API
+    - State: Enabled
+  - This creates the scope: api://<APP_CLIENT_ID>/user_impersonation
+- Manifest: set `"accessTokenAcceptedVersion": 2` to ensure v2 tokens
 
-##🔐 2. Azure Setup (Critical Section)
+B. Swagger / OpenAPI client app (fastapi-openapi-client)
+- Register a second app — name: fastapi-openapi-client
+- Supported account types: Single tenant
+- Redirect URIs → Add platform: Single-page application (SPA)
+  - Redirect URI: http://localhost:8000/oauth2-redirect
+  - (If using a different URL for docs, update accordingly)
+- Copy:
+  - Application (client) ID → OPENAPI_CLIENT_ID
+- API Permissions
+  - Add a permission -> APIs my organization uses -> select fastapi-backend
+  - Choose delegated permission: user_impersonation
+  - Grant admin consent for your tenant (or ask an admin to grant)
+- Manifest: set `"accessTokenAcceptedVersion": 2`
 
-You must create two Azure App Registrations.
-
-#🅐 App Registration 1 – Backend API App
-
-This is your FastAPI backend.
-
-Steps:
-
-Go to Azure → Entra ID → App Registrations → New Registration
-
-Name: fastapi-backend
-
-Supported account types:
-✔️ Single tenant
-
-Register → Copy:
-
-Application (client) ID → APP_CLIENT_ID
-
-Directory (tenant) ID → TENANT_ID
-
-Expose an API (Important!)
-
-Go to Expose an API
-
-Click Add a scope
-
-Set Application ID URI:
-
-api://<APP_CLIENT_ID>
-
-
-Add scope:
-
-Field	Value
-Scope name	user_impersonation
-Admin consent display name	Access API
-Admin consent description	Allows user to call the API
-State	Enabled
-
-This scope becomes:
-
-api://<APP_CLIENT_ID>/user_impersonation
-
-Manifest Update
-
-Open Manifest → Set:
-
-"accessTokenAcceptedVersion": 2
-
-
-This ensures v2.0 tokens are issued.
-
-#🅑 App Registration 2 – Swagger / OpenAPI Client
-
-Swagger UI needs its own app registration, because users login through Swagger.
-
-Steps:
-
-New registration
-Name: fastapi-openapi-client
-
-Supported account types:
-✔️ Single tenant
-
-Redirect URIs → Add (SPA):
-
-http://localhost:8000/oauth2-redirect
-
-
-Copy:
-
-Application (client) ID → OPENAPI_CLIENT_ID
-
-Assign API Permissions
-
-Go to API Permissions → Add a Permission
-
-Select APIs my organization uses
-
-Find fastapi-backend (App #1)
-
-Select user_impersonation scope
-
-Click Grant admin consent
-
-Manifest Update
-
-Set:
-
-"accessTokenAcceptedVersion": 2
-
-🧪 3. .env Configuration
-
-Create the .env file in /app:
-
+3. .env example
+Create an .env file (in /app or project root as configured)
+```
 TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 APP_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 OPENAPI_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
+# CORS origins as a comma-separated list or configure to parse into list in Settings
 BACKEND_CORS_ORIGINS=http://localhost:8000
+```
+Tip: If you store multiple origins, parse them into a list in Settings or use JSON array syntax.
 
-🚀 4. Run Locally
-
-Install dependencies:
-
+4. Install dependencies
+Recommended install (use a virtualenv)
+```
 pip install fastapi uvicorn fastapi-azure-auth pydantic-settings python-jose
+```
+(If you prefer a requirements.txt, add these names there.)
 
-
-Run:
-
-uvicorn app.main:app --reload
-
-
+5. Run locally
+```
+uvicorn app.main:app --reload --port 8000
+```
 Open:
+http://localhost:8000/docs
 
-👉 http://localhost:8000/docs
+6. Test authentication in Swagger UI
+- Open /docs
+- Click Authorize
+- The Swagger UI will redirect you to Microsoft Entra ID and perform the Authorization Code flow with PKCE
+- After login/consent, Swagger receives an access token
+- Try calling the protected endpoint (GET /api/protected)
 
-🔓 5. Test Authentication in Swagger UI
-
-Open Swagger at /docs
-
-Click Authorize
-
-Login with Microsoft Entra ID
-
-Azure redirects back to /oauth2-redirect
-
-Swagger obtains an access token
-
-Now call
-▶️ GET /protected
-
-You will get a response like:
-
+Example authenticated response:
+```json
 {
   "message": "You are authenticated!",
   "user": {
@@ -250,15 +197,22 @@ You will get a response like:
     "oid": "user-guid"
   }
 }
+```
 
-🎉 6. Summary
+7. Notes and troubleshooting
+- Ensure both app registrations are single-tenant and in the same tenant.
+- Ensure you use the backend APP_CLIENT_ID when creating the scope/expose an API.
+- Ensure the Swagger/OpenAPI client app has the delegated permission to the backend API and that admin consent is granted.
+- If Swagger fails to obtain a token, check the redirect URI, the client ID set in swagger_ui_init_oauth, and that the OpenAPI client app is configured as an SPA redirect.
+- If your tokens lack expected claims, confirm `"accessTokenAcceptedVersion": 2` in the manifest and that your app registration token settings are correct.
 
-This project demonstrates:
+Summary
+This README was cleaned up to:
+- Use consistent setting names (SCOPE_NAME / SCOPE_FULL_NAME)
+- Show concrete code snippets for config, auth, routers, and main
+- Clarify Azure steps and common pitfalls
+- Improve formatting and examples
 
-✔️ Azure Single-Tenant Authentication
-✔️ Authorization Code Flow + PKCE
-✔️ Protected API routes
-✔️ Swagger UI login
-✔️ Clean folder structure
-✔️ Config handled via .env
-✔️ Scopes validated on each request
+Next steps
+- Review the updated README below and commit it into the repository if it looks good.
+- If you want, I can prepare a PR that updates README.md in your repo (I will not push anything unless you ask me to).
